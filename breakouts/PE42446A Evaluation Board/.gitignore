@@ -4,3 +4,4 @@ production/
 fabrication-toolkit-options.json
 *.lck
 fp-info-cache
+*.kicad_prl
