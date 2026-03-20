@@ -1,0 +1,5 @@
+868-antenna-backups/
+production/
+fabrication-toolkit-options.json
+*.lck
+fp-info-cache
