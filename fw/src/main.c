@@ -1,11 +1,13 @@
 #include "main.h"
 #include <ctype.h>
+#include "runtime_control.h"
 #include "utils.h"
 
 
 SPI_HandleTypeDef hspi1;
 UART_HandleTypeDef huart2;
 LR1121_HandleTypeDef hlr1121;
+static RuntimeControlCtx g_runtime;
 
 int main(void)
 {
@@ -13,12 +15,12 @@ int main(void)
 	uint8_t rx_payload[255];
 	uint8_t rx_len = 0U;
 	int16_t rssi_dbm_x2 = 0;
-	const uint32_t rx_timeout_rtc = 0x00000000UL; // No timeout, 0x000FFFFUL for max timeout
-	LR1121_LoRaProfile rx_profile = {
-		.frequency_hz = 2403000000UL,
+	const uint32_t rx_timeout_rtc = 32768UL;
+	const LR1121_LoRaProfile default_profile = {
+		.frequency_hz = 868030000UL,
 		.modulation = {
-			.sf = LR1121_LORA_SF7,
-			.bw = LR1121_LORA_BW_400,
+			.sf = LR1121_LORA_SF12,
+			.bw = LR1121_LORA_BW_125,
 			.cr = LR1121_LORA_CR_4_5,
 			.ldro = LR1121_LORA_LDRO_OFF,
 		},
@@ -58,7 +60,8 @@ int main(void)
 		Error_Handler();
 	}
 
-	st = LR1121_ConfigureLoRa(&hlr1121, &rx_profile);
+	RuntimeControl_Init(&g_runtime, &hlr1121, &huart2, &default_profile);
+	st = RuntimeControl_ApplyInitial(&g_runtime);
 	if (st != HAL_OK)
 	{
 		const LR1121_DebugInfo *dbg = LR1121_GetLastDebugInfo();
@@ -73,10 +76,18 @@ int main(void)
 		Error_Handler();
 	}
 
-	uart_log("LR1121 RX ready at %lu Hz, waiting for LoRa packets\r\n", rx_profile.frequency_hz);
+	RuntimeControl_PrintWelcome(&g_runtime);
 
 	while (1)
 	{
+		RuntimeControl_Poll(&g_runtime);
+
+		if (!RuntimeControl_IsRxEnabled(&g_runtime))
+		{
+			HAL_Delay(10);
+			continue;
+		}
+
 		st = LR1121_ReceiveLoRaPacket(&hlr1121,
 												 rx_payload,
 												 (uint8_t)sizeof(rx_payload),
@@ -85,6 +96,7 @@ int main(void)
 												 rx_timeout_rtc);
 		if (st == HAL_OK)
 		{
+			HAL_GPIO_TogglePin(APP_LED_PORT, APP_LED_PIN);
 			int16_t rssi_abs_x2 = (rssi_dbm_x2 < 0) ? (int16_t)(-rssi_dbm_x2) : rssi_dbm_x2;
 			uart_log("RX done: RSSI=%d.%u dBm\r\n",
 						 (int)(rssi_dbm_x2 / 2),
@@ -94,7 +106,7 @@ int main(void)
 		}
 		else if (st == HAL_TIMEOUT)
 		{
-			uart_log("RX timeout\r\n");
+			/* Timeout is expected in periodic RX windows. */
 		}
 		else
 		{
@@ -114,4 +126,19 @@ int main(void)
 					 (unsigned int)sys_err);
 		}
 	}
+}
+
+void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart)
+{
+	RuntimeControl_OnUartRxCplt(&g_runtime, huart);
+}
+
+void HAL_UART_ErrorCallback(UART_HandleTypeDef *huart)
+{
+	RuntimeControl_OnUartError(&g_runtime, huart);
+}
+
+void USART2_IRQHandler(void)
+{
+	HAL_UART_IRQHandler(&huart2);
 }
